@@ -1,0 +1,25 @@
+{
+  "name": "codenames-client",
+  "version": "0.1.0",
+  "description": "TypeScript client for codenames.game",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "example": "tsc && node dist/example.js"
+  },
+  "dependencies": {
+    "boardgame.io": "^0.50.2",
+    "immer": "^11.1.4",
+    "lodash.isplainobject": "^4.0.6",
+    "nanoid": "^3.3.7",
+    "rxjs": "^7.8.2",
+    "socket.io-client": "^4.7.5"
+  },
+  "devDependencies": {
+    "@types/lodash.isplainobject": "^4.0.9",
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}

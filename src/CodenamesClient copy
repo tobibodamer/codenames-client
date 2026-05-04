@@ -1,0 +1,526 @@
+// /**
+//  * CodenamesClient.ts
+//  *
+//  * The public-facing client. Wraps the boardgame.io Client with:
+//  *  - Typed move dispatchers
+//  *  - Typed state subscription
+//  *  - All codenames-specific transport methods (joinMatch, playAgain, etc.)
+//  *
+//  * Usage:
+//  *   const client = new CodenamesClient({
+//  *     server: 'https://server-discord.gke.codenames.game',
+//  *     matchID: 'B3Gkcnaid3O',
+//  *     playerID: '1',
+//  *     credentials: 'basudoha-mozafiri-kofiloka',
+//  *     roomID: 'dibut-lapaj',
+//  *     playerName: 'Luna',
+//  *     playerLocale: 'de',
+//  *   });
+//  *
+//  *   const unsub = client.subscribe(state => console.log(state));
+//  *   client.connect();
+//  *
+//  *   // Later…
+//  *   client.joinTeam('side2');
+//  *   client.giveClue('Eisvogel', 3);
+//  *   client.tipCard('ARKTIS');
+//  *   client.guessCard('ARKTIS');
+//  *   client.endGuessing();
+//  */
+
+// import { Ctx, LogEntry, PlayerID } from "boardgame.io";
+// import {
+//   BehaviorSubject,
+//   concatAll,
+//   distinctUntilChanged,
+//   map,
+//   Observable,
+// } from "rxjs";
+// import { EventEmitter } from "stream";
+// import { ClientImpl } from "./client";
+// import { CNDuetGame } from "./game/CNDuetGame";
+// import { computeDerivedState, DerivedState, getCurrentPlayer, getPlayerInfo, getPlayerTeamRole } from "./helpers";
+// import { CodenamesSocketIO } from "./transport/CodenamesSocketIO";
+// import type {
+//   Clue,
+//   CodenamesClientOptions,
+//   CodenamesClientState,
+//   GameState,
+//   MatchData,
+//   PlayerInfo,
+//   SetupData,
+//   Team,
+//   WordEntry,
+// } from "./types";
+
+// type LocalState = {
+//   G: GameState,
+//   ctx: Ctx,
+//   _stateID: number,
+//   playerID?: PlayerID | null,
+//   matchData?: MatchData | null,
+//   //servertimedelta: calcServerTimeDelta,
+//   isConnected: boolean,
+//   gameName: string,
+//   setupData: SetupData,
+//   syncError: string | null,
+//   derived: DerivedState
+// }
+
+// const TOTAL_PLAYERS = 64; // codenames.game uses 64 slots
+
+// export class CodenamesClientOld extends EventEmitter<{
+//   joinMatch: [{ playerID: string; credentials: string }];
+// }> {
+//   private bgio;
+//   private opts;
+
+//   private readonly _clientState$ =
+//     new BehaviorSubject<CodenamesClientState | null>(null);
+
+//   private readonly _state$ =
+//     new BehaviorSubject<LocalState | null>(null);
+
+//   readonly state$: Observable<LocalState | null> = this._state$.pipe(
+//     map((s) => s ?? null),
+//   );
+
+//   readonly players$: Observable<PlayerInfo[]> = this._state$.pipe(
+//     map((s) => s?.matchData?.map(meta => getPlayerInfo({ meta, playerID: String(meta.id), G: s.G })) ?? []),
+//   );
+
+//   readonly connectionState$: Observable<boolean> = this._clientState$.pipe(
+//     map((s) => s?.isConnected === true),
+//   );
+//   readonly logEntries$: Observable<LogEntry> = this._clientState$.pipe(
+//     map((s) => s?.log ?? []),
+//     concatAll(),
+//   );
+//   readonly game$: Observable<GameState | null> = this._clientState$.pipe(
+//     map((s) => s?.G ?? null),
+//   );
+
+//   /**
+//    * Emits true when it is the authenticated user's turn.
+//    * Combines me$ + game$ so it stays correct across re-matches.
+//    */
+//   readonly isMyTurn$: Observable<boolean> = this._state$.pipe(
+//     map((state) => state?.derived.isMyTurn === true),
+//   );
+
+//   /**
+//    * Emits true when the authenticated user is the room master (host).
+//    * Only the master can call startGame().
+//    */
+//   readonly isMaster$: Observable<boolean> = this._state$.pipe(
+//     map((state) => state?.derived.currentPlayer?.isHost === true),
+//   );
+
+//   readonly clueGiven$: Observable<Clue | null> = this._state$.pipe(
+//     map((state) =>
+//       state && !state.derived.isClueGivingStage ? state.derived.lastClue : null,
+//     ),
+//     distinctUntilChanged(),
+//   );
+
+//   get currentPlayer(): PlayerInfo | null {
+//     return getCurrentPlayer({ playerID: this.bgio.playerID, matchData: this.bgio.matchData, G: this._clientState$.value?.G })
+//   }
+
+//   get game(): GameState | null { return this._clientState$.value?.G ?? null; }
+
+//   constructor(
+//     opts: Pick<
+//       CodenamesClientOptions,
+//       | "matchID"
+//       | "playerID"
+//       | "credentials"
+//       | "roomID"
+//       | "playerName"
+//       | "playerImage"
+//       | "playerLocale"
+//     > & { server: string },
+//   ) {
+//     super();
+//     this.opts = opts;
+
+//     this.bgio = new ClientImpl({
+//       game: CNDuetGame,
+//       debug: false,
+//       numPlayers: TOTAL_PLAYERS,
+//       multiplayer: CodenamesSocketIO({
+//         server: opts.server,
+//         socketOpts: {
+//           path: "/socket.io",
+//           query: { EIO: "4" },
+//           transports: ["websocket"],
+//         },
+//       }),
+//       matchID: opts.matchID,
+//       playerID: opts.playerID,
+//       credentials: opts.credentials,
+//       roomID: opts.roomID,
+//       playerName: opts.playerName,
+//       playerImage: opts.playerImage ?? null,
+//       playerLocale: opts.playerLocale ?? "en",
+//       onJoinMatch: (args) => {
+//         this.emit("joinMatch", args);
+//       },
+//       enhancer: 
+//     });
+
+//     this.bgio.subscribe((state) => this._clientState$.next(state));
+
+//     this._clientState$.pipe(
+//       map((s) =>
+//         s
+//           ? {
+//             G: s.G,
+//             ctx: s.ctx,
+//             _stateID: s._stateID,
+//             playerID: this.bgio.playerID,
+//             matchData: this.bgio.matchData,
+//             isConnected: s.isConnected,
+//             gameName: s.gameName,
+//             setupData: s.setupData,
+//             syncError: s.syncError,
+//             derived: computeDerivedState({
+//               ...s,
+//               playerID: this.bgio.playerID,
+//               matchData: this.bgio.matchData,
+//             }),
+//           } as LocalState
+//           : null,
+//       ),
+//     ).subscribe(this._state$);
+
+//     // this.bgio.subscribe(state => {
+
+//     //   if (!state) {
+//     //     return
+//     //   }
+
+//     //   let n = computeDerivedState({
+//     //     G: state.G,
+//     //     ctx: state.ctx,
+//     //     playerID: this.bgio.playerID,
+//     //     matchData: this.bgio.matchData,
+//     //     gameName: state.gameName,
+//     //     client: this.bgio
+//     //   })
+//     //   let o = {
+//     //     G: state.G,
+//     //     ctx: state.ctx,
+//     //     _stateID: state._stateID,
+//     //     playerID: this.bgio.playerID,
+//     //     matchData: this.bgio.matchData,
+//     //     isConnected: state.isConnected,
+//     //     //servertimedelta: calcServerTimeDelta,
+//     //     gameName: state.gameName,
+//     //     setupData: state.setupData,
+//     //     syncError: null,
+//     //     derived: n
+//     //   }
+//     // }
+
+//     // );
+//   }
+
+//   // ── Lifecycle ──────────────────────────────────────────────────────────────
+
+//   /** Connect to the server and start receiving state updates. */
+//   connect(): Promise<void> {
+//     this.bgio.start();
+
+//     return new Promise<void>((resolve) => {
+//       const unsub = this.bgio.subscribe((state) => {
+//         if (state?.isConnected) {
+//           resolve();
+//           unsub();
+//         }
+//       });
+//     });
+//   }
+
+//   /** Disconnect and stop all background intervals. */
+//   disconnect(): void {
+//     this.bgio.stop();
+//   }
+
+//   /**
+//    * Subscribe to state changes.
+//    * The callback is called immediately with the current state, then on every update.
+//    * Returns an unsubscribe function.
+//    */
+//   subscribe(
+//     callback: (state: CodenamesClientState | null) => void,
+//   ): () => void {
+//     return this.bgio.subscribe((state) => {
+//       callback(state);
+//     });
+//   }
+
+//   /** Get the current state snapshot synchronously. */
+//   get state() {
+//     return this._state$.value
+//   }
+
+//   // ── Lobby moves ────────────────────────────────────────────────────────────
+
+//   /** Join a team. Can be called before or after a game (allowAfterGameover). */
+//   joinTeam(team: Team): void {
+//     this.bgio.moves.joinTeam(team);
+//   }
+
+//   /** Leave your current team. */
+//   leaveTeam(): void {
+//     this.bgio.moves.leaveTeam();
+//   }
+
+//   /** Lock / unlock team switching (host only). */
+//   setLockTeams(locked: boolean): void {
+//     this.bgio.moves.setLockTeams(locked);
+//   }
+
+//   /** Clear all teams. */
+//   resetTeams(): void {
+//     this.bgio.moves.resetTeams();
+//   }
+
+//   /**
+//    * Randomly distribute `players` between side1 and side2.
+//    * @param players Array of { id: number } objects from filteredMetadata
+//    */
+//   randomizeTeams(players: Array<{ id: number }>): void {
+//     this.bgio.moves.randomizeTeams(players);
+//   }
+
+//   /**
+//    * Start the game. Called by the host after teams are set.
+//    * `words` should be an array of 25 WordEntry objects (fetched from the
+//    * codenames content API or provided by you).
+//    */
+//   startMatch(words: WordEntry[]): void {
+//     this.bgio.moves.startMatch(words);
+//   }
+
+//   // ── In-game moves ──────────────────────────────────────────────────────────
+
+//   /**
+//    * Give a clue as spymaster.
+//    * @param clue The clue
+//    * @param player  Your PlayerInfo (from state metadata + your team info)
+//    * @param selectedWords  Words you pre-selected to communicate intent (can be [])
+//    */
+//   giveClue(
+//     clue: Clue,
+//     player?: PlayerInfo,
+//     selectedWords: string[] = [],
+//   ): void {
+//     player ??= this.currentPlayer ?? undefined
+//     if (!player) {
+//       throw new Error("No player found")
+//     }
+
+//     this.bgio.moves.giveClue(
+//       clue,
+//       player ?? this.currentPlayer,
+//       selectedWords,
+//     );
+//   }
+
+//   /**
+//    * Toggle a tip marker on a card (operative communication).
+//    * Calling with the same word a second time removes the tip.
+//    */
+//   tipCard(word: string): void {
+//     this.bgio.moves.tipCard(word);
+//   }
+
+//   /**
+//    * Guess a card as operative.
+//    * @param word  The word on the card
+//    * @param player  Your PlayerInfo
+//    */
+//   guessCard(word: string, player: PlayerInfo): void {
+//     this.bgio.moves.guessCard(word, player);
+//   }
+
+//   /**
+//    * End your guessing turn voluntarily (discards a timer token and switches roles).
+//    * @param player  Your PlayerInfo
+//    */
+//   endGuessing(player: PlayerInfo): void {
+//     this.bgio.moves.endGuessing(player);
+//   }
+
+//   // ── Suggestion moves ───────────────────────────────────────────────────────
+
+//   /**
+//    * Add a clue suggestion for your team to vote on before giving the real clue.
+//    * @param word  Suggested clue
+//    * @param number  Suggested count
+//    * @param relatedWords  Cards you think this clue covers
+//    * @param player  Your PlayerInfo
+//    */
+//   addSuggestion(
+//     word: string,
+//     number: number,
+//     relatedWords: string[],
+//     player: PlayerInfo,
+//   ): void {
+//     this.bgio.moves.addSuggestion(
+//       { word, number, words: relatedWords },
+//       player,
+//     );
+//   }
+
+//   /**
+//    * Remove a suggestion you previously added.
+//    * @param id  Suggestion id
+//    * @param team  The team whose suggestion list to remove from
+//    */
+//   removeSuggestion(id: string, team: Team): void {
+//     this.bgio.moves.removeSuggestion(id, team);
+//   }
+
+//   /**
+//    * Toggle a like on a suggestion.
+//    * @param id  Suggestion id
+//    * @param player  Your PlayerInfo
+//    */
+//   likeSuggestionToggle(id: string, player: PlayerInfo): void {
+//     this.bgio.moves.likeSuggestionToggle(id, player);
+//   }
+
+//   /**
+//    * Toggle a warning on a suggestion.
+//    * @param id  Suggestion id
+//    * @param player  Your PlayerInfo
+//    * @param warningType  Warning category string
+//    */
+//   warningSuggestionToggle(
+//     id: string,
+//     player: PlayerInfo,
+//     warningType: string,
+//   ): void {
+//     this.bgio.moves.warningSuggestionToggle(id, player, warningType);
+//   }
+
+//   // ── Transport-level actions ────────────────────────────────────────────────
+
+//   /**
+//    * Ask the server to redirect to the next match (called automatically by the
+//    * framework when the server emits `playNextMatch`, but can be triggered manually).
+//    */
+//   playAgain(): void {
+//     this.bgio.playAgain?.();
+//   }
+
+//   /**
+//    * Emit a joinMatch event over the socket (used for lobby joining via socket
+//    * rather than the REST API).
+//    * @param payload  Join metadata (playerName, credentials, roomID, etc.)
+//    */
+//   joinMatch(payload: Record<string, unknown>): void {
+//     this.bgio.joinMatch(payload);
+//   }
+
+//   /**
+//    * Update this client's setup data (host only, affects word language / packs / timer).
+//    * @param data  Partial SetupData to merge
+//    */
+//   updateSetupData(data: Record<string, unknown>): void {
+//     this.bgio.updateSetupData(data);
+//   }
+
+//   /**
+//    * Send a chat message.
+//    * @param text  Message text
+//    */
+//   sendChat(text: string): void {
+//     this.bgio.sendChatMessage(text);
+//   }
+
+//   /**
+//    * Force a sync with the server (useful after a detected stale state).
+//    */
+//   requestSync(): void {
+//     this.bgio.requestSync();
+//   }
+
+//   // ── Convenience helpers ────────────────────────────────────────────────────
+
+//   /** True when the socket is connected. */
+//   get isConnected(): boolean {
+//     return this.state?.isConnected ?? false;
+//   }
+
+//   /** True when it is this player's turn to act. */
+//   get isActive(): boolean {
+//     return this.bgio.getState()?.isActive ?? false;
+//   }
+
+//   /** Your playerID string. */
+//   get playerID(): string {
+//     return this.opts.playerID!;
+//   }
+
+//   /** Your team, derived from current game state. */
+//   get myTeam(): Team | null {
+//     const state = this.state;
+//     if (!state) return null;
+//     // const key = `p#${this.bgio.playerID}`;
+//     // for (const team of Object.keys(state.G.teams) as Team[]) {
+//     //   if (state.G.teams[team]?.[key]) return team;
+//     // }
+//     //return null;
+
+//     return getPlayerTeamRole(state.G.teams, this.bgio.playerID!).team;
+//   }
+
+//   // /**
+//   //  * Build a PlayerInfo object for moves that require it.
+//   //  * Call this right before dispatching a move so it reflects current state.
+//   //  */
+//   // buildPlayerInfo(): PlayerInfo | null {
+
+//   //   if (!this.bgio.playerID || !this.bgio.matchData)
+//   //     return null;
+
+//   //   const meta = this.bgio.matchData?.find(p => String(p.id) === this.opts.playerID);
+//   //   if (!meta)
+//   //     return null;
+//   //   let o = this.bgio.getState()?.G.teams ? r(i.teams, t) : {
+//   //     team: null,
+//   //     role: null
+//   //   };
+//   //   return {
+//   //     id: t,
+//   //     playerID: t,
+//   //     name: a.name ?? `Player ${t}`,
+//   //     isConnected: a.isConnected ?? !0,
+//   //     isHost: a.isHost ?? !1,
+//   //     image: a.image,
+//   //     team: o.team,
+//   //     role: o.role
+//   //   }
+
+//   //   const state = this.getState();
+//   //   const team = this.myTeam;
+//   //   if (!state || !team) return null;
+
+//   //   const meta = this.bgio.matchData?.find(p => String(p.id) === this.opts.playerID);
+
+//   //   return {
+//   //     id: this.opts.playerID,
+//   //     playerID: this.opts.playerID,
+//   //     name: this.opts.playerName,
+//   //     image: this.opts.playerImage ?? null,
+//   //     team,
+//   //     role: team, // in Duet, role mirrors team
+//   //     isConnected: meta?.isConnected ?? true,
+//   //     isHost: meta?.isHost ?? false,
+//   //   };
+//   // }
+// }
