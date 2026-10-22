@@ -4,8 +4,12 @@
   "description": "TypeScript client for codenames.game",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
+    "prepare": "npm run build",
     "dev": "tsc --watch",
     "example": "tsc && node dist/example.js",
     "test": "npm run build && node --test --test-concurrency=1 test/**/*.test.js",
