@@ -1,42 +1,53 @@
 import { firstValueFrom, map } from "rxjs";
 import { CodenamesClient } from "./CodenamesClient";
-import { CodenamesProvider, createCodenamesProvider } from "./provider";
+import { createCodenamesProvider } from "./provider";
 
 async function run() {
+  const roomArg = process.argv.slice(2)[0];
+  console.log(roomArg ? `Joining room: ${roomArg}` : "Creating a new room...");
+
   const provider = createCodenamesProvider({
     serverURL: "https://server-discord.gke.codenames.game",
-
+    gameName: "cnduet",
     clientOpts: {
-      credentials: "basudoha-mozafiri-kofiloka",
-      playerName: "Luna",
-      roomID: process.argv.slice(2)[0]
-    }
-  })
+      playerName: roomArg ? "Guest Player" : "Host Player",
+      roomID: roomArg || undefined,
+    },
+  });
 
-  provider.start()
+  provider.start();
 
-  const client = await firstValueFrom(provider.state$.pipe(map((state) => state.client ? new CodenamesClient(state.client) : null)))
+  const client = await firstValueFrom(
+    provider.state$.pipe(
+      map((state) => (state.client ? new CodenamesClient(state.client) : null))
+    )
+  );
 
   if (!client) {
-    return
+    throw new Error("Failed to initialize CodenamesClient");
   }
 
-  client.subscribe(state => {
-    console.log(state?.G)
+  console.log("Connecting and waiting for sync...");
+  await client.waitForSync();
 
-  })
-
-  await client.connect()
-
-  console.log("Client connected!")
-
-  //client.joinMatch({ matchID: "default", roomID: process.argv.slice(2)[0] })
+  console.log(`Connected! Room ID: ${client.roomID}, Player ID: ${client.playerID}`);
 
   if (!client.myTeam) {
-    client.joinTeam("side2")
+    const targetTeam = roomArg ? "side2" : "side1";
+    console.log(`Joining team: ${targetTeam}`);
+    client.joinTeam(targetTeam);
   }
 
-  //client.giveClue("Test", 1, )
+  console.log(`Current phase: ${client.state?.ctx.phase}`);
+
+  // Wait briefly to observe state update after joinTeam, then shut down cleanly
+  await new Promise((resolve) => setTimeout(resolve, 2000));
+  console.log(`Assigned team in state: ${client.myTeam}`);
+  provider.stop();
+  process.exit(0);
 }
 
-run().catch(err => console.error(err))
+run().catch((err) => {
+  console.error("Error in example:", err);
+  process.exit(1);
+});

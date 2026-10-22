@@ -39,6 +39,7 @@ import { CodenamesTransport, CodenamesTransportOpts } from './transport/Codename
 import { ClientManager } from './bgio/manager';
 import { Subject, Observable } from 'rxjs';
 import { PlayerView } from './bgio/plugins/main';
+import { generateCredentials } from './slug';
 
 const { sync, update, patch, reset, undo, redo } = ActionCreators;
 
@@ -107,6 +108,7 @@ export class ClientImpl<
   readonly multiplayer: (opts: CodenamesTransportOpts) => CodenamesTransport;
   private reducer: Reducer;
   private _running: boolean;
+  private subscriberCounter: number = 0;
   private subscribers: Record<string, (state: CodenamesClientState | null) => void>;
   private transport: CodenamesTransport;
   private manager: ClientManager;
@@ -143,6 +145,7 @@ export class ClientImpl<
   gameName: string | undefined;
   syncError: any;
   roomTimeout: boolean | undefined;
+  resyncPending: boolean = false;
   lastTransportReceivedAt: number = 0;
   transportSyncCheckInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -177,9 +180,10 @@ export class ClientImpl<
     playerLocale,
   }: CodenamesClientOptions) {
     this.game = ProcessGameConfig(game);
+    this.gameName = this.game.name;
     this.playerID = playerID ?? null!;
     this.matchID = matchID ?? 'default';
-    this.credentials = credentials;
+    this.credentials = credentials ?? generateCredentials();
     this.multiplayer = multiplayer;
     this.debugOpt = debug;
     this.manager = GlobalClientManager;
@@ -335,15 +339,15 @@ export class ClientImpl<
       transportDataCallback: (data: any) => this.receiveTransportData(data),
       gameKey: game,
       game: this.game,
-      matchID,
-      playerID,
-      credentials,
+      matchID: this.matchID,
+      playerID: this.playerID!,
+      credentials: this.credentials,
       gameName: this.game.name,
       numPlayers,
-      roomID,
-      playerName,
-      playerImage,
-      playerLocale,
+      roomID: this.roomID ?? undefined,
+      playerName: this.playerName ?? '',
+      playerImage: this.playerImage,
+      playerLocale: this.playerLocale,
     });
 
     this.createDispatchers();
@@ -417,6 +421,9 @@ export class ClientImpl<
         const [matchID, syncState] = data.args;
         if (matchID !== this.matchID) return;
 
+        this.resyncPending = false;
+        this.syncError = undefined;
+        this.roomTimeout = undefined;
         this.servertime = syncState.servertime;
         this.setupData = syncState.setupData;
         this.gameName = syncState.gameName;
@@ -448,10 +455,36 @@ export class ClientImpl<
 
         this.servertime = servertime;
 
-        const currentStateID = this.store.getState()._stateID;
-        if (prevStateID !== currentStateID) break;
+        const currentState = this.store.getState();
+        const currentStateID = currentState ? currentState._stateID : -1;
+        if (prevStateID !== currentStateID) {
+          if (nextStateID > currentStateID && !this.resyncPending) {
+            this.resyncPending = true;
+            this.transport.requestSync();
+          }
+          break;
+        }
 
-        const action = patch(prevStateID, nextStateID, patchData, deltas);
+        // Sanitize remove operations where the target property does not exist in state
+        // (e.g. server-side transients like /plugins/log/data/metadata).
+        // rfc6902 strict compliance produces a MissingError if deleting a non-existent path.
+        const sanitizedPatch = Array.isArray(patchData)
+          ? patchData.filter((op: any) => {
+              if (op && op.op === 'remove' && typeof op.path === 'string') {
+                const parts = op.path.split('/').filter(Boolean);
+                let curr: any = currentState;
+                for (const part of parts) {
+                  if (curr == null || typeof curr !== 'object' || !(part in curr)) {
+                    return false;
+                  }
+                  curr = curr[part];
+                }
+              }
+              return true;
+            })
+          : patchData;
+
+        const action = patch(prevStateID, nextStateID, sanitizedPatch, deltas);
         this.store.dispatch(action);
 
         // If patch failed to advance the state, request a full sync
@@ -477,12 +510,18 @@ export class ClientImpl<
 
       case 'createdMatch': {
         const [roomID, matchID, playerID, credentials] = data.args;
+        if ('default' !== this.matchID && this.matchID !== matchID) return;
+        this.syncError = undefined;
+        this.roomTimeout = undefined;
         this.updateCreatedMatch(roomID, matchID, playerID, credentials);
         break;
       }
 
       case 'joinedMatch': {
         const [matchID, playerID, credentials] = data.args;
+        if ('default' !== this.matchID && this.matchID !== matchID) return;
+        this.syncError = undefined;
+        this.roomTimeout = undefined;
         this.updateMatchID(matchID);
         this.updatePlayerID(playerID);
         this.updateCredentials(credentials);
@@ -555,6 +594,7 @@ export class ClientImpl<
   }
 
   start(): void {
+    if (this._running) return;
     this.transport.connect();
     this._running = true;
     this.manager.register(this as any);
@@ -565,6 +605,10 @@ export class ClientImpl<
     }, 5000);
   }
 
+  get running(): boolean {
+    return this._running;
+  }
+
   stop(): void {
     this.transport.disconnect();
     this._running = false;
@@ -573,7 +617,7 @@ export class ClientImpl<
   }
 
   subscribe(callback: (state: CodenamesClientState | null) => void): () => void {
-    const id = Object.keys(this.subscribers).length;
+    const id = String(++this.subscriberCounter);
     this.subscribers[id] = callback;
 
     this.transport.subscribeToConnectionStatus(() =>
@@ -648,6 +692,8 @@ export class ClientImpl<
       gameName: this.gameName as GameName,
       syncError: this.syncError,
       roomTimeout: this.roomTimeout,
+      roomID: this.roomID,
+      matchID: this.matchID,
     };
   }
 

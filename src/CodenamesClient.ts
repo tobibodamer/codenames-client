@@ -29,7 +29,7 @@ export class CodenamesClient extends EventEmitter<{
     new BehaviorSubject<CodenamesClientState | null>(null);
 
   readonly players$: Observable<PlayerInfo[]> = this._clientState$.pipe(
-    map((s) => this.bgio.matchData?.map(meta => getPlayerInfo({ meta, playerID: String(meta.id), G: s.G })) ?? []),
+    map((s) => this.bgio.matchData?.map(meta => getPlayerInfo({ meta, playerID: String(meta.id), G: s?.G })) ?? []),
   );
 
   readonly connectionState$: Observable<boolean> = this._clientState$.pipe(
@@ -58,13 +58,55 @@ export class CodenamesClient extends EventEmitter<{
 
   /** Connect to the server and start receiving state updates. */
   connect(): Promise<void> {
-    this.bgio.start();
+    if (this.isConnected) {
+      return Promise.resolve();
+    }
+
+    if (!this.bgio.running) {
+      this.bgio.start();
+    }
 
     return new Promise<void>((resolve) => {
       const unsub = this.bgio.subscribe((state) => {
         if (state?.isConnected) {
           resolve();
           unsub();
+        }
+      });
+    });
+  }
+
+  /**
+   * Wait until the client receives a fully synchronized game state.
+   */
+  waitForSync(timeoutMs: number = 20000): Promise<CodenamesClientState> {
+    return new Promise((resolve, reject) => {
+      const currentState = this.state;
+      if (currentState?.G && currentState.isConnected) {
+        return resolve(currentState);
+      }
+      if (currentState?.syncError) {
+        return reject(new Error(`Sync error: ${currentState.syncError}`));
+      }
+
+      const timer = setTimeout(() => {
+        unsub();
+        reject(new Error(`Timed out after ${timeoutMs}ms waiting for sync`));
+      }, timeoutMs);
+
+      const unsub = this.subscribe((state) => {
+        if (state?.syncError) {
+          clearTimeout(timer);
+          unsub();
+          reject(new Error(`Sync error: ${state.syncError}`));
+        } else if (state?.roomTimeout) {
+          clearTimeout(timer);
+          unsub();
+          reject(new Error('Room timed out'));
+        } else if (state?.G && state.isConnected) {
+          clearTimeout(timer);
+          unsub();
+          resolve(state);
         }
       });
     });
@@ -176,18 +218,22 @@ export class CodenamesClient extends EventEmitter<{
   /**
    * Guess a card as operative.
    * @param word  The word on the card
-   * @param player  Your PlayerInfo
+   * @param player  Your PlayerInfo (defaults to currentPlayer)
    */
-  guessCard(word: string, player: PlayerInfo): void {
-    this.bgio.moves.guessCard(word, player);
+  guessCard(word: string, player?: PlayerInfo): void {
+    const p = player ?? this.currentPlayer;
+    if (!p) throw new Error("No player found");
+    this.bgio.moves.guessCard(word, p);
   }
 
   /**
    * End your guessing turn voluntarily (discards a timer token and switches roles).
-   * @param player  Your PlayerInfo
+   * @param player  Your PlayerInfo (defaults to currentPlayer)
    */
-  endGuessing(player: PlayerInfo): void {
-    this.bgio.moves.endGuessing(player);
+  endGuessing(player?: PlayerInfo): void {
+    const p = player ?? this.currentPlayer;
+    if (!p) throw new Error("No player found");
+    this.bgio.moves.endGuessing(p);
   }
 
   // ── Suggestion moves ───────────────────────────────────────────────────────
@@ -197,17 +243,19 @@ export class CodenamesClient extends EventEmitter<{
    * @param word  Suggested clue
    * @param number  Suggested count
    * @param relatedWords  Cards you think this clue covers
-   * @param player  Your PlayerInfo
+   * @param player  Your PlayerInfo (defaults to currentPlayer)
    */
   addSuggestion(
     word: string,
     number: number,
     relatedWords: string[],
-    player: PlayerInfo,
+    player?: PlayerInfo,
   ): void {
+    const p = player ?? this.currentPlayer;
+    if (!p) throw new Error("No player found");
     this.bgio.moves.addSuggestion(
       { word, number, words: relatedWords },
-      player,
+      p,
     );
   }
 
@@ -223,10 +271,12 @@ export class CodenamesClient extends EventEmitter<{
   /**
    * Toggle a like on a suggestion.
    * @param id  Suggestion id
-   * @param player  Your PlayerInfo
+   * @param player  Your PlayerInfo (defaults to currentPlayer)
    */
-  likeSuggestionToggle(id: string, player: PlayerInfo): void {
-    this.bgio.moves.likeSuggestionToggle(id, player);
+  likeSuggestionToggle(id: string, player?: PlayerInfo): void {
+    const p = player ?? this.currentPlayer;
+    if (!p) throw new Error("No player found");
+    this.bgio.moves.likeSuggestionToggle(id, p);
   }
 
   /**
@@ -308,5 +358,20 @@ export class CodenamesClient extends EventEmitter<{
     if (!state) return null;
 
     return getPlayerTeamRole(state.G.teams, this.bgio.playerID!).team;
+  }
+
+  /** The room ID (e.g. "potaz-zuvaj") */
+  get roomID(): string | null {
+    return this.bgio.roomID ?? this.state?.roomID ?? null;
+  }
+
+  /** The match ID */
+  get matchID(): string {
+    return this.bgio.matchID;
+  }
+
+  /** The player credentials token */
+  get credentials(): string {
+    return this.bgio.credentials;
   }
 }

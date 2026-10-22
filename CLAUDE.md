@@ -7,10 +7,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ```bash
 npm run build        # compile TypeScript → dist/
 npm run dev          # watch mode (tsc --watch)
-npm run example      # build + run src/example.ts (accepts room ID as first CLI arg)
+npm test             # run all live integration tests against live codenames server
+npm run test:duet    # run Codenames Duet live test suite
+npm run test:classic # run Classic Codenames live test suite
+npm run example      # build + run src/example.ts (accepts room ID as optional CLI arg)
 ```
 
-There is no test runner configured.
+See `docs/protocol-and-troubleshooting.md` for a complete breakdown of the codenames.game protocol and troubleshooting steps.
 
 ## Architecture
 

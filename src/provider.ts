@@ -36,9 +36,9 @@ export interface CNProviderConfig {
     /** boardgame.io playerID (numeric string: "0", "1", …) */
     playerID?: string;
     /** Auth credential token received on join */
-    credentials: string;
-    /** Room ID (short human-readable room code) */
-    roomID?: string;
+    credentials?: string;
+    /** Room ID (short human-readable room code, or null/undefined when creating room) */
+    roomID?: string | null;
     /** Display name */
     playerName: string;
     playerImage?: string | null
@@ -94,6 +94,8 @@ export type ProviderState = {
   _stateID: number,
   playerID?: PlayerID | null,
   matchData?: MatchData | null,
+  roomID?: string | null,
+  matchID?: string,
   //servertimedelta: calcServerTimeDelta,
   isConnected: boolean,
   gameName: GameName,
@@ -110,6 +112,8 @@ const INITIAL_STATE: ProviderState = {
   _stateID: 0,
   playerID: null,
   matchData: null,
+  roomID: null,
+  matchID: undefined,
   isConnected: false,
   gameName: "cnduet",
   setupData: null,
@@ -177,7 +181,6 @@ export class CodenamesProvider {
               debug: false,
               numPlayers: 64,
               matchID: "default",
-              roomID: generateRoomId(),
               multiplayer: CodenamesSocketIO(socketParams),
               ...(this.config.clientOpts),
             };
@@ -292,6 +295,8 @@ export class CodenamesProvider {
         _stateID: clientState._stateID ?? 0,
         playerID: client.playerID,
         matchData: client.matchData,
+        roomID: client.roomID ?? clientState.roomID ?? null,
+        matchID: client.matchID ?? clientState.matchID,
         isConnected: newClientState.isConnected ?? false,
         gameName: newClientState.gameName ?? state.gameName,
         setupData: newClientState.setupData ?? null,
@@ -323,7 +328,7 @@ const createProviderConfig = (): CNProviderConfig => {
       playerName: "",
       playerLocale: "de",
       matchID: "default",
-      roomID: generateRoomId(),
+      roomID: undefined,
     },
 
     computeDerivedState
@@ -331,5 +336,13 @@ const createProviderConfig = (): CNProviderConfig => {
 }
 
 export function createCodenamesProvider(config: Partial<CNProviderConfig>): CodenamesProvider {
-  return new CodenamesProvider({ ...createProviderConfig(), ...config, });
+  const base = createProviderConfig();
+  return new CodenamesProvider({
+    ...base,
+    ...config,
+    clientOpts: {
+      ...base.clientOpts,
+      ...(config.clientOpts ?? {}),
+    },
+  });
 }

@@ -223,6 +223,8 @@ export type CodenamesClientState = ClientState<GameState> & {
   servertime?: number;
   syncError?: string;
   roomTimeout?: boolean;
+  roomID?: string | null;
+  matchID?: string;
 }
 
 // ─── Setup / lobby config ─────────────────────────────────────────────────────
@@ -273,13 +275,13 @@ export interface WordEntry {
 
 export interface CodenamesClientOptions extends ClientOpts {
   /** boardgame.io matchID */
-  matchID: string;
+  matchID?: string;
   /** boardgame.io playerID (numeric string: "0", "1", …) */
   playerID?: string;
   /** Auth credential token received on join */
-  credentials: string;
-  /** Room ID (short human-readable room code) */
-  roomID: string;
+  credentials?: string;
+  /** Room ID (short human-readable room code, or null/undefined when creating a new room) */
+  roomID?: string | null;
   /** Display name */
   playerName: string;
   playerImage?: string | null;

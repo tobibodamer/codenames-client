@@ -35,11 +35,32 @@ await client.connect();
 client.joinTeam('side2');
 ```
 
-Run the bundled example against a live room:
+Run the bundled example (creates a new room, or joins if code provided):
 
 ```bash
-npm run example ROOM-CODE
+npm run example [ROOM-CODE]
 ```
+
+## Testing & Verification
+
+Run the integration tests against the live `codenames.game` server:
+
+```bash
+# Run all live integration tests
+npm test
+
+# Run Duet tests only
+npm run test:duet
+
+# Run Classic tests only
+npm run test:classic
+```
+
+## Protocol Documentation
+
+Detailed reverse-engineered protocol information, past changes, and troubleshooting steps for when the backend changes can be found in:
+- [`docs/protocol-and-troubleshooting.md`](docs/protocol-and-troubleshooting.md)
+- [`docs/CHANGELOG.md`](docs/CHANGELOG.md)
 
 ## License
 

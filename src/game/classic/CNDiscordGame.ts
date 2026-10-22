@@ -188,7 +188,7 @@ export const CNClassicGame: Game<GameStateClassic> = {
           console.error('Invalid team parameter:', team);
           return INVALID_MOVE;
         }
-        if (!role || !(env.G.teams as any)[role]?.[team] !== undefined) {
+        if (!role || (env.G.teams as any)[role]?.[team] === undefined) {
           console.error('Invalid role parameter:', role);
           return INVALID_MOVE;
         }

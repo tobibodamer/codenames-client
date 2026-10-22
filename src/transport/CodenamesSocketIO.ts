@@ -67,6 +67,7 @@ export class CodenamesTransport extends Transport {
   private playerName: string;
   private playerImage: string | null | undefined;
   private playerLocale: string;
+  private seatingInProgress: boolean = false;
 
   constructor(opts: CodenamesTransportOpts) {
     super(opts);
@@ -175,8 +176,17 @@ export class CodenamesTransport extends Transport {
     });
 
     this.socket.on('createdMatch', (roomID, matchID, playerID, credentials, serverURL) => {
-      this.updateServerURL(serverURL);
-      this.notifyClient({ type: 'createdMatch', args: [roomID, matchID, playerID, credentials, serverURL] } as any);
+      if ('default' === this.matchID || this.matchID === matchID) {
+        this.seatingInProgress = true;
+        try {
+          this.notifyClient({ type: 'createdMatch', args: [roomID, matchID, playerID, credentials, serverURL] } as any);
+        } finally {
+          this.seatingInProgress = false;
+        }
+        if (!this.updateServerURL(serverURL)) {
+          this.requestSync();
+        }
+      }
     });
 
     this.socket.on('chat', (matchID: string, message: unknown) => {
@@ -225,7 +235,7 @@ export class CodenamesTransport extends Transport {
       playerName: this.playerName,
       playerImage: this.playerImage,
       playerLocale: this.playerLocale,
-      roomID: this.roomID,
+      roomID: this.roomID || null,
       credentials: this.credentials,
     };
     this.socket.emit('sync', this.matchID, this.playerID, this.credentials, meta);
@@ -236,9 +246,10 @@ export class CodenamesTransport extends Transport {
   /**
    * Called when the server sends a new URL (shard redirect).
    * Parses the URL and reconnects if anything changed.
+   * Returns true if a reconnect was triggered.
    */
-  private updateServerURL(rawURL: string | undefined): void {
-    if (!rawURL) return;
+  private updateServerURL(rawURL: string | undefined): boolean {
+    if (!rawURL) return false;
     const parsed = this.getServerURLAndPath(new URL(rawURL));
     let changed = false;
 
@@ -257,6 +268,8 @@ export class CodenamesTransport extends Transport {
       this.disconnect();
       this.connect();
     }
+
+    return changed;
   }
 
   /** Fall back to the original lobby server after total reconnection failure */
@@ -274,14 +287,16 @@ export class CodenamesTransport extends Transport {
     matchID: string,
     playerID: string,
     credentials: string,
-    gameName: string
+    gameName?: string
   ): void {
     this.roomID = roomID;
     this.matchID = matchID;
     this.playerID = playerID;
     this.credentials = credentials;
-    this.gameName = gameName;
-    this.requestSync();
+    if (gameName) this.gameName = gameName;
+    if (!this.seatingInProgress) {
+      this.requestSync();
+    }
   }
 
   override updateMatchID(id: string): void {
